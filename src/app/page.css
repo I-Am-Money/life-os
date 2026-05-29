@@ -1,0 +1,14 @@
+.app {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: #0a0a0f;
+}
+.app-main {
+  flex: 1;
+  padding-top: 64px;
+}
+@media (max-width: 700px) {
+  .desktop-nav { display: none !important; }
+  .mobile-menu-btn { display: flex !important; }
+}

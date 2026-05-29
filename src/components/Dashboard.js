@@ -1,0 +1,559 @@
+'use client'
+import React, { useState, useEffect, useCallback } from 'react'
+import { AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend } from 'recharts'
+import { TrendingUp, TrendingDown, DollarSign, Target, MapPin, LogOut, ArrowUpRight, CheckCircle, AlertCircle, RefreshCw } from 'lucide-react'
+import { CITIES, formatCurrency } from '@/lib/financialEngine'
+import { updateProfile, logout } from '@/lib/auth'
+
+const CAT_COLORS = {
+  'Rent': '#f97316', 'Groceries': '#fbbf24', 'Transport': '#fb923c',
+  'Dining Out': '#fdba74', 'Entertainment': '#7dd3fc', 'Utilities': '#6ee7b7',
+  'Health': '#4ade80', 'Shopping': '#fbbf24', 'Subscriptions': '#94a3b8',
+}
+
+const S = {
+  page: { background: '#0a0a0f', minHeight: '100vh', paddingTop: 64 },
+  wrap: { maxWidth: 1200, margin: '0 auto', padding: '40px 24px' },
+  card: { background: '#111111', border: '1px solid rgba(249,115,22,0.12)', borderRadius: 18, overflow: 'hidden', boxShadow: '0 2px 12px rgba(0,0,0,0.4)' },
+  cardBody: { padding: '22px' },
+  cardHead: { padding: '16px 22px', borderBottom: '1px solid rgba(249,115,22,0.1)', background: '#0d0d0d', display: 'flex', alignItems: 'center', justifyContent: 'space-between' },
+  headTitle: { fontFamily: 'DM Sans, sans-serif', fontSize: 14, fontWeight: 700, color: '#f5f0eb' },
+  headSub: { fontSize: 11, color: '#4a3f35', fontFamily: 'var(--font-mono)', letterSpacing: '0.06em' },
+  statCard: { background: '#111111', border: '1px solid rgba(249,115,22,0.12)', borderRadius: 18, padding: '22px', boxShadow: '0 2px 12px rgba(0,0,0,0.4)' },
+  statLabel: { fontSize: 10, fontFamily: 'var(--font-mono)', letterSpacing: '0.12em', textTransform: 'uppercase', color: '#4a3f35', marginBottom: 10 },
+  statVal: { fontFamily: 'var(--font-mono)', fontSize: '1.5rem', fontWeight: 700, lineHeight: 1, marginBottom: 6, color: '#f5f0eb' },
+  statSub: { fontSize: 12, color: '#a09080', fontFamily: 'DM Sans, sans-serif' },
+  row: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '11px 0', borderBottom: '1px solid rgba(249,115,22,0.07)', fontSize: 13 },
+  tooltip: { background: '#1a1a1a', border: '1px solid rgba(249,115,22,0.2)', borderRadius: 10, padding: '10px 14px', fontSize: 12, fontFamily: 'var(--font-mono)' },
+}
+
+const Tip = ({ active, payload, label }) => {
+  if (!active || !payload?.length) return null
+  return (
+    <div style={S.tooltip}>
+      <div style={{ color: '#4a3f35', marginBottom: 6 }}>{label}</div>
+      {payload.map((p, i) => <div key={i} style={{ color: p.color, marginBottom: 2 }}>{p.name}: {typeof p.value === 'number' && p.value > 99 ? formatCurrency(p.value) : p.value}</div>)}
+    </div>
+  )
+}
+
+export default function Dashboard({ user, onLogout, setView }) {
+  const [profile,    setProfile]    = useState(user.profile || {})
+  const [activeTab,  setActiveTab]  = useState('overview')
+  const [aiTips,     setAiTips]     = useState([])
+  const [aiLoading,  setAiLoading]  = useState(false)
+  const [marketData, setMarketData] = useState(null)
+  const [marketAge,  setMarketAge]  = useState(null)
+  const [saved,      setSaved]      = useState(false)
+
+  const [healthHistory, setHealthHistory] = useState([])
+
+  // Load health score history from localStorage
+  useEffect(() => {
+    if (!user?.email) return
+    const key = `lifeos_health_${user.email}`
+    const stored = (() => { try { return JSON.parse(localStorage.getItem(key) || '[]') } catch { return [] } })()
+    setHealthHistory(stored)
+  }, [healthScore, user?.email])
+
+  // Load live market data
+  useEffect(() => {
+    const cached = (() => { try { return JSON.parse(localStorage.getItem('lifeos_market') || 'null') } catch { return null } })()
+    const stale  = !cached || (Date.now() - cached.fetchedAt > 7 * 24 * 60 * 60 * 1000) // refresh weekly
+    if (cached && !stale) { setMarketData(cached); setMarketAge(cached.fetchedAt); return }
+
+    fetch('/api/market').then(r => r.json()).then(d => {
+      localStorage.setItem('lifeos_market', JSON.stringify(d))
+      setMarketData(d)
+      setMarketAge(d.fetchedAt)
+    }).catch(() => {})
+  }, [])
+
+  const city     = CITIES[profile.city] || CITIES['Atlanta, GA']
+  const liveRent = marketData?.cities?.[profile.city]?.medianRent1BR || city.medianRent1BR
+  const liveGrow = marketData?.cities?.[profile.city]?.annualGrowthRate || city.rentGrowthRate
+
+  const salary         = profile.salary           || 65000
+  const monthlyExpenses= profile.monthlyExpenses  || 2800
+  const savingsBalance = profile.savings          || 0
+  const totalDebt      = profile.debt             || 0
+  const invRate        = profile.investmentRate   || 0.2
+
+  const monthlyTakeHome = Math.round(salary * 0.72 / 12)
+  const monthlySavings  = monthlyTakeHome - monthlyExpenses
+  const savingsRate     = Math.round((Math.max(0, monthlySavings) / monthlyTakeHome) * 100)
+  const debtToIncome    = Math.round((totalDebt / salary) * 100)
+  const rentToIncome    = Math.round(((profile.monthlyRent || 0) / monthlyTakeHome) * 100)
+  const affordability   = Math.min(100, Math.round((monthlyTakeHome / (liveRent * 2.5)) * 100))
+
+  const healthScore = Math.round(
+    (Math.min(savingsRate, 25) / 25 * 40) +
+    (Math.max(0, 100 - debtToIncome) / 100 * 30) +
+    (affordability / 100 * 30)
+  )
+  const healthColor = healthScore >= 70 ? '#4ade80' : healthScore >= 45 ? '#fbbf24' : '#f87171'
+  const healthLabel = healthScore >= 70 ? 'Healthy'  : healthScore >= 45 ? 'Fair'    : 'Needs Work'
+
+  // Persist health score to localStorage every time it changes
+  useEffect(() => {
+    if (!user?.email || healthScore === 0) return
+    const key = `lifeos_health_${user.email}`
+    const existing = (() => { try { return JSON.parse(localStorage.getItem(key) || '[]') } catch { return [] } })()
+    const entry = {
+      score: healthScore,
+      label: healthLabel,
+      date:  new Date().toISOString(),
+      breakdown: {
+        savingsComponent:       Math.round(Math.min(savingsRate, 25) / 25 * 40),
+        debtComponent:          Math.round(Math.max(0, 100 - debtToIncome) / 100 * 30),
+        affordabilityComponent: Math.round(affordability / 100 * 30),
+        savingsRate,
+        debtToIncome,
+        affordability,
+        monthlySavings,
+        monthlyExpenses,
+        salary,
+        city: profile.city,
+      },
+    }
+    const last = existing[existing.length - 1]
+    // Always write when the score changes — keeps the record up to date
+    if (!last || last.score !== healthScore) {
+      existing.push(entry)
+      if (existing.length > 365) existing.splice(0, existing.length - 365)
+      localStorage.setItem(key, JSON.stringify(existing))
+    } else {
+      // Same score — just update the timestamp on the last entry so it stays current
+      existing[existing.length - 1].date = new Date().toISOString()
+      localStorage.setItem(key, JSON.stringify(existing))
+    }
+  }, [healthScore, user?.email])
+
+  // Spending breakdown from profile
+  const txns          = user.transactions || []
+  const latestTxns    = txns.filter(t => t.monthsAgo === 0)
+  const spending      = latestTxns.map(t => ({ name: t.category, value: t.amount, color: CAT_COLORS[t.category] || '#f97316' }))
+  const totalSpending = spending.reduce((s, c) => s + c.value, 0)
+
+  // 6-month trend
+  const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun']
+  const trend = MONTHS.map((month, i) => {
+    const mo   = txns.filter(t => t.monthsAgo === 5 - i)
+    const total = mo.reduce((s, t) => s + t.amount, 0)
+    return { month, Spending: total }
+  })
+
+  // Net worth projection
+  const netWorthProjection = Array.from({ length: 6 }, (_, i) => {
+    const years = i * 5
+    const inv   = (monthlySavings > 0 ? monthlySavings * invRate * 12 : 0)
+    const nw    = Math.round(savingsBalance + inv * years * (1 + 0.07 * (years / 10)) - totalDebt * Math.pow(0.88, i))
+    return { year: i === 0 ? 'Now' : `Yr ${years}`, 'Net Worth': nw }
+  })
+
+  const fetchAiTips = useCallback(async () => {
+    setAiLoading(true)
+    try {
+      const macro = marketData?.macro || {}
+      const prompt = `You are a personal finance advisor. Give 4 short, practical, personalized tips based on this person's exact numbers. Be direct. No symbols, no bullet point characters, just plain sentences.
+
+Profile:
+- Name: ${user.name}
+- City: ${profile.city} (avg 1BR rent: $${liveRent}/mo, rent growth: ${(liveGrow * 100).toFixed(1)}%/yr)
+- Annual salary: $${salary.toLocaleString()}
+- Monthly take-home (after tax): $${monthlyTakeHome.toLocaleString()}
+- Monthly rent: $${(profile.monthlyRent || 0).toLocaleString()}
+- Total monthly expenses: $${monthlyExpenses.toLocaleString()}
+- Monthly savings after expenses: $${monthlySavings.toLocaleString()}
+- Savings rate: ${savingsRate}%
+- Current savings: $${savingsBalance.toLocaleString()}
+- Total debt: $${totalDebt.toLocaleString()}
+- Investment rate: ${(invRate * 100).toFixed(0)}%
+- Rent to income ratio: ${rentToIncome}%
+- Debt to income ratio: ${debtToIncome}%
+- Current fed funds rate: ${macro.fedFundsRate || 5.33}%
+- Current inflation: ${macro.inflationRate || 3.1}%
+
+Return ONLY a JSON array, no preamble. Each item: { tip: "string", priority: "high|medium|low", category: "Savings|Debt|Income|Housing|Investing" }. Keep each tip to 1-2 sentences. Use specific dollar amounts from their profile.`
+
+      const res  = await fetch('/api/ai', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ prompt }) })
+      const data = await res.json()
+      const text = (data.text || '').replace(/```json|```/g, '').trim()
+      setAiTips(JSON.parse(text))
+    } catch {
+      setAiTips([
+        { tip: `Your rent is ${rentToIncome}% of take-home pay. The standard recommendation is under 30%. ${rentToIncome > 35 ? 'Consider whether a roommate could reduce this cost.' : 'You are within a healthy range.'}`, priority: rentToIncome > 35 ? 'high' : 'low', category: 'Housing' },
+        { tip: `You are saving $${Math.max(0, monthlySavings).toLocaleString()} per month. Automating this transfer on payday removes the temptation to spend it.`, priority: monthlySavings < 200 ? 'high' : 'medium', category: 'Savings' },
+        { tip: totalDebt > 0 ? `You carry $${totalDebt.toLocaleString()} in total debt. With current interest rates elevated, paying down high-interest balances first will save you the most money.` : 'You have no outstanding debt. Focus on building your investment portfolio with a low-cost index fund.', priority: totalDebt > 30000 ? 'high' : 'medium', category: totalDebt > 0 ? 'Debt' : 'Investing' },
+        { tip: `You are investing ${(invRate * 100).toFixed(0)}% of leftover income. Financial planners generally recommend 15-20% of gross income going to long-term investments.`, priority: invRate < 0.15 ? 'medium' : 'low', category: 'Investing' },
+      ])
+    }
+    setAiLoading(false)
+  }, [profile, marketData, salary, monthlyTakeHome, monthlySavings, savingsRate, savingsBalance, totalDebt, invRate, rentToIncome, debtToIncome, liveRent, liveGrow])
+
+  useEffect(() => { if (marketData !== null) fetchAiTips() }, [marketData])
+
+  const saveProfile = () => {
+    const updated = updateProfile({ profile })
+    if (updated?.profile) setProfile(updated.profile)  // sync immediately so score is accurate
+    setSaved(true)
+    setTimeout(() => setSaved(false), 2000)
+    if (updated) fetchAiTips()
+  }
+
+  const FieldInput = ({ label, fieldKey, prefix = '$', suffix = '', helper = '' }) => (
+    <div style={{ marginBottom: 16 }}>
+      <label style={{ display: 'block', fontSize: 13, fontWeight: 600, color: '#a09080', marginBottom: 5, fontFamily: 'DM Sans, sans-serif' }}>{label}</label>
+      <div style={{ display: 'flex', alignItems: 'center', background: '#0d0d0d', border: '1px solid rgba(249,115,22,0.2)', borderRadius: 10, overflow: 'hidden' }}>
+        {prefix && <span style={{ padding: '0 11px', color: '#4a3f35', fontFamily: 'var(--font-mono)', fontSize: 13, borderRight: '1px solid rgba(249,115,22,0.12)' }}>{prefix}</span>}
+        <input type="number" min="0" value={profile[fieldKey] || ''} onChange={e => setProfile(p => ({ ...p, [fieldKey]: Number(e.target.value) }))}
+          style={{ flex: 1, padding: '10px 12px', background: 'transparent', border: 'none', outline: 'none', fontFamily: 'var(--font-mono)', fontSize: 14, fontWeight: 700, color: '#f5f0eb' }} />
+        {suffix && <span style={{ padding: '0 11px', color: '#4a3f35', fontSize: 12 }}>{suffix}</span>}
+      </div>
+      {helper && <div style={{ fontSize: 11, color: '#4a3f35', marginTop: 3 }}>{helper}</div>}
+    </div>
+  )
+
+  const priorityColor = { high: '#f87171', medium: '#fbbf24', low: '#4ade80' }
+  const categoryColor = { Savings: '#f97316', Debt: '#f87171', Income: '#4ade80', Housing: '#7dd3fc', Investing: '#fb923c' }
+
+  const tabs = [['overview','Overview'],['spending','Spending'],['location','Location'],['profile','Profile']]
+
+  return (
+    <div style={S.page}>
+      <div style={S.wrap}>
+
+        {/* Header */}
+        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', flexWrap: 'wrap', gap: 16, marginBottom: 36 }}>
+          <div>
+            <p style={{ fontSize: 10, color: '#4a3f35', fontFamily: 'var(--font-mono)', letterSpacing: '0.14em', textTransform: 'uppercase', marginBottom: 6 }}>Dashboard</p>
+            <h1 style={{ fontFamily: 'DM Sans, sans-serif', fontWeight: 700, fontSize: 'clamp(1.5rem,3vw,2rem)', color: '#f5f0eb', letterSpacing: '-0.02em', marginBottom: 6 }}>
+              Hello, {user.name.split(' ')[0]}
+            </h1>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: '#4a3f35', flexWrap: 'wrap' }}>
+              <MapPin size={12} color="#4a3f35" />
+              {profile.city || 'Atlanta, GA'}
+              {marketAge && (
+                <span style={{ fontSize: 10, color: '#4a3f35', fontFamily: 'var(--font-mono)' }}>
+                  · Market data: {new Date(marketAge).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                </span>
+              )}
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+            <button onClick={() => setView('simulator')} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '9px 18px', background: '#f97316', color: '#0a0a0f', border: 'none', borderRadius: 10, cursor: 'pointer', fontSize: 13, fontWeight: 700, fontFamily: 'DM Sans, sans-serif', boxShadow: '0 3px 12px rgba(249,115,22,0.3)' }}>
+              Run Simulation <ArrowUpRight size={13} />
+            </button>
+            <button onClick={() => { logout(); onLogout() }} style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '9px 16px', background: 'transparent', color: '#a09080', border: '1px solid rgba(249,115,22,0.2)', borderRadius: 10, cursor: 'pointer', fontSize: 13, fontFamily: 'DM Sans, sans-serif' }}>
+              <LogOut size={13} /> Sign Out
+            </button>
+          </div>
+        </div>
+
+        {/* Tabs */}
+        <div style={{ display: 'flex', gap: 2, background: '#0d0d0d', padding: 3, borderRadius: 11, border: '1px solid rgba(249,115,22,0.12)', marginBottom: 28, width: 'fit-content' }}>
+          {tabs.map(([id, label]) => (
+            <button key={id} onClick={() => setActiveTab(id)} style={{
+              padding: '8px 20px', border: 'none', cursor: 'pointer', borderRadius: 9, fontSize: 13,
+              fontWeight: activeTab === id ? 700 : 400, fontFamily: 'DM Sans, sans-serif', transition: 'all 0.18s',
+              background: activeTab === id ? '#f97316' : 'transparent',
+              color: activeTab === id ? '#0a0a0f' : '#a09080',
+              boxShadow: activeTab === id ? '0 1px 6px rgba(249,115,22,0.3)' : 'none',
+            }}>{label}</button>
+          ))}
+        </div>
+
+        {/* ── OVERVIEW ─────────────────────────────────────────── */}
+        {activeTab === 'overview' && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+
+            {/* Health + KPIs */}
+            <div style={{ display: 'grid', gridTemplateColumns: '220px 1fr', gap: 16 }}>
+              <div style={{ ...S.statCard, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 14, justifyContent: 'center' }}>
+                <svg width={120} height={120} viewBox="0 0 120 120">
+                  <circle cx={60} cy={60} r={50} fill="none" stroke="rgba(249,115,22,0.12)" strokeWidth={10} />
+                  <circle cx={60} cy={60} r={50} fill="none" stroke={healthColor} strokeWidth={10}
+                    strokeDasharray={`${(healthScore / 100) * 314} 314`} strokeLinecap="round"
+                    transform="rotate(-90 60 60)" style={{ transition: 'stroke-dasharray 1s ease' }} />
+                  <text x={60} y={57} textAnchor="middle" fontFamily="Space Mono" fontSize={26} fontWeight={700} fill="#f5f0eb">{healthScore}</text>
+                  <text x={60} y={73} textAnchor="middle" fontFamily="DM Sans" fontSize={11} fill="#4a3f35">out of 100</text>
+                </svg>
+                <div style={{ textAlign: 'center' }}>
+                  <div style={{ fontWeight: 700, fontSize: 15, color: healthColor, marginBottom: 4, fontFamily: 'DM Sans, sans-serif' }}>{healthLabel}</div>
+                  <div style={{ fontSize: 11, color: '#4a3f35', lineHeight: 1.55, fontFamily: 'DM Sans, sans-serif' }}>Based on savings rate, debt load, and local affordability</div>
+                </div>
+                {healthHistory.length > 1 && (
+                  <div style={{ width: '100%', marginTop: 8 }}>
+                    <div style={{ fontSize: 9, color: '#4a3f35', fontFamily: 'var(--font-mono)', letterSpacing: '0.1em', textTransform: 'uppercase', marginBottom: 6, textAlign: 'center' }}>Score History</div>
+                    <div style={{ display: 'flex', alignItems: 'flex-end', gap: 3, height: 36, justifyContent: 'center' }}>
+                      {healthHistory.slice(-12).map((h, i) => (
+                        <div key={i} title={`${h.score} on ${new Date(h.date).toLocaleDateString()}`} style={{ flex: 1, maxWidth: 14, height: `${(h.score / 100) * 36}px`, background: h.score >= 70 ? '#4ade80' : h.score >= 45 ? '#fbbf24' : '#f87171', borderRadius: 2, opacity: 0.5 + (i / healthHistory.slice(-12).length) * 0.5, transition: 'all 0.2s' }} />
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+                {[
+                  { label: 'Monthly Take-Home', val: formatCurrency(monthlyTakeHome), sub: 'After estimated taxes', color: '#f97316' },
+                  { label: 'Monthly Surplus', val: formatCurrency(Math.max(0, monthlySavings)), sub: `${Math.max(0, savingsRate)}% savings rate`, color: monthlySavings >= 0 ? '#4ade80' : '#f87171' },
+                  { label: 'Current Savings', val: formatCurrency(savingsBalance), sub: `${Math.round(savingsBalance / Math.max(1, monthlyExpenses))} months of expenses`, color: '#fb923c' },
+                  { label: 'Total Debt', val: formatCurrency(totalDebt), sub: `${debtToIncome}% of annual income`, color: totalDebt > 0 ? '#f87171' : '#4ade80' },
+                ].map(k => (
+                  <div key={k.label} style={S.statCard}>
+                    <div style={S.statLabel}>{k.label}</div>
+                    <div style={{ ...S.statVal, color: k.color }}>{k.val}</div>
+                    <div style={S.statSub}>{k.sub}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Net worth projection */}
+            <div style={S.card}>
+              <div style={S.cardHead}>
+                <span style={S.headTitle}>25-Year Net Worth Projection</span>
+                <span style={S.headSub}>Based on your current savings rate</span>
+              </div>
+              <div style={{ padding: '20px', height: 220 }}>
+                <ResponsiveContainer width="100%" height="100%">
+                  <AreaChart data={netWorthProjection}>
+                    <defs>
+                      <linearGradient id="nwGrad" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%"  stopColor="#f97316" stopOpacity={0.25} />
+                        <stop offset="95%" stopColor="#f97316" stopOpacity={0} />
+                      </linearGradient>
+                    </defs>
+                    <CartesianGrid strokeDasharray="3 3" stroke="rgba(249,115,22,0.07)" />
+                    <XAxis dataKey="year" tick={{ fill: '#4a3f35', fontSize: 11, fontFamily: 'Space Mono' }} />
+                    <YAxis tickFormatter={v => formatCurrency(v)} tick={{ fill: '#4a3f35', fontSize: 10 }} />
+                    <Tooltip content={<Tip />} />
+                    <Area type="monotone" dataKey="Net Worth" stroke="#f97316" fill="url(#nwGrad)" strokeWidth={2.5} dot={{ fill: '#f97316', r: 3 }} />
+                  </AreaChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+
+            {/* AI Suggestions */}
+            <div style={S.card}>
+              <div style={S.cardHead}>
+                <span style={S.headTitle}>Personalized Suggestions</span>
+                <button onClick={fetchAiTips} disabled={aiLoading} style={{ fontSize: 12, color: aiLoading ? '#4a3f35' : '#f97316', background: 'none', border: 'none', cursor: aiLoading ? 'not-allowed' : 'pointer', fontFamily: 'DM Sans, sans-serif', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 5 }}>
+                  <RefreshCw size={12} style={{ animation: aiLoading ? 'spin 1s linear infinite' : 'none' }} />
+                  {aiLoading ? 'Updating' : 'Refresh'}
+                </button>
+              </div>
+              <div style={S.cardBody}>
+                {aiLoading ? (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '16px 0', color: '#4a3f35', fontSize: 13 }}>
+                    <div className="spinner" /> Analyzing your financial situation with live market data...
+                  </div>
+                ) : aiTips.length > 0 ? (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                    {aiTips.map((tip, i) => (
+                      <div key={i} style={{ display: 'flex', gap: 14, padding: '14px 16px', background: '#0d0d0d', border: `1px solid rgba(249,115,22,0.1)`, borderRadius: 11, borderLeft: `3px solid ${categoryColor[tip.category] || '#f97316'}` }}>
+                        <div style={{ width: 22, height: 22, borderRadius: '50%', background: priorityColor[tip.priority] + '18', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, marginTop: 1 }}>
+                          {tip.priority === 'high' ? <AlertCircle size={12} color={priorityColor[tip.priority]} /> : <CheckCircle size={12} color={priorityColor[tip.priority]} />}
+                        </div>
+                        <div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 5 }}>
+                            <span style={{ fontSize: 10, fontWeight: 700, fontFamily: 'var(--font-mono)', color: categoryColor[tip.category] || '#f97316', letterSpacing: '0.08em', textTransform: 'uppercase' }}>{tip.category}</span>
+                            <span style={{ fontSize: 10, padding: '2px 7px', borderRadius: 100, background: priorityColor[tip.priority] + '18', color: priorityColor[tip.priority], fontFamily: 'var(--font-mono)', fontWeight: 600 }}>{tip.priority}</span>
+                          </div>
+                          <p style={{ fontSize: 13, color: '#a09080', lineHeight: 1.65, margin: 0, fontFamily: 'DM Sans, sans-serif' }}>{tip.tip}</p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ── SPENDING ─────────────────────────────────────────── */}
+        {activeTab === 'spending' && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 18 }}>
+              <div style={S.card}>
+                <div style={S.cardHead}><span style={S.headTitle}>This Month</span><span style={S.headSub}>{formatCurrency(totalSpending)} total</span></div>
+                <div style={{ padding: 20, height: 280, display: 'flex', alignItems: 'center' }}>
+                  <ResponsiveContainer width="55%" height="100%">
+                    <PieChart>
+                      <Pie data={spending} cx="50%" cy="50%" innerRadius={60} outerRadius={88} paddingAngle={2} dataKey="value">
+                        {spending.map((e, i) => <Cell key={i} fill={e.color} />)}
+                      </Pie>
+                      <Tooltip formatter={v => formatCurrency(v)} contentStyle={{ background: '#1a1a1a', border: '1px solid rgba(249,115,22,0.2)', borderRadius: 10, fontSize: 12, fontFamily: 'var(--font-mono)' }} />
+                    </PieChart>
+                  </ResponsiveContainer>
+                  <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 5 }}>
+                    {spending.map(c => (
+                      <div key={c.name} style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 11 }}>
+                        <div style={{ width: 7, height: 7, borderRadius: 2, background: c.color, flexShrink: 0 }} />
+                        <span style={{ color: '#a09080', fontFamily: 'DM Sans, sans-serif' }}>{c.name}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+              <div style={S.card}>
+                <div style={S.cardHead}><span style={S.headTitle}>6-Month Trend</span></div>
+                <div style={{ padding: 20, height: 280 }}>
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={trend} barSize={28}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="rgba(249,115,22,0.07)" />
+                      <XAxis dataKey="month" tick={{ fill: '#4a3f35', fontSize: 11 }} />
+                      <YAxis tickFormatter={v => `$${(v/1000).toFixed(0)}k`} tick={{ fill: '#4a3f35', fontSize: 10 }} />
+                      <Tooltip content={<Tip />} />
+                      <Bar dataKey="Spending" fill="#f97316" radius={[4,4,0,0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+            </div>
+            <div style={S.card}>
+              <div style={S.cardHead}><span style={S.headTitle}>Category Breakdown</span><span style={S.headSub}>Current month</span></div>
+              <div style={{ padding: '6px 0' }}>
+                {spending.sort((a,b) => b.value - a.value).map((cat, i) => {
+                  const pct = Math.round((cat.value / totalSpending) * 100)
+                  return (
+                    <div key={cat.name} style={{ display: 'flex', alignItems: 'center', gap: 16, padding: '11px 22px', borderBottom: i < spending.length - 1 ? '1px solid rgba(249,115,22,0.06)' : 'none' }}>
+                      <div style={{ width: 8, height: 8, borderRadius: 2, background: cat.color, flexShrink: 0 }} />
+                      <span style={{ flex: 1, fontSize: 14, color: '#f5f0eb', fontFamily: 'DM Sans, sans-serif' }}>{cat.name}</span>
+                      <div style={{ flex: 2 }}>
+                        <div style={{ height: 5, background: 'rgba(249,115,22,0.1)', borderRadius: 3, overflow: 'hidden' }}>
+                          <div style={{ height: '100%', width: `${pct}%`, background: cat.color, borderRadius: 3 }} />
+                        </div>
+                      </div>
+                      <span style={{ fontFamily: 'var(--font-mono)', fontSize: 13, fontWeight: 700, color: '#f5f0eb', minWidth: 72, textAlign: 'right' }}>{formatCurrency(cat.value)}</span>
+                      <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: '#4a3f35', minWidth: 34, textAlign: 'right' }}>{pct}%</span>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ── LOCATION ─────────────────────────────────────────── */}
+        {activeTab === 'location' && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+            <div style={S.card}>
+              <div style={S.cardHead}><span style={S.headTitle}>Affordability in {profile.city || 'Atlanta, GA'}</span><span style={S.headSub}>{marketData ? 'Live data from FRED' : 'Cached data'}</span></div>
+              <div style={{ padding: 24 }}>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 32, alignItems: 'start' }}>
+                  <div>
+                    <div style={{ fontFamily: 'var(--font-mono)', fontSize: '3.5rem', fontWeight: 800, color: affordability >= 75 ? '#4ade80' : affordability >= 50 ? '#fbbf24' : '#f87171', lineHeight: 1, marginBottom: 10 }}>{affordability}%</div>
+                    <div style={{ fontSize: 10, color: '#4a3f35', fontFamily: 'var(--font-mono)', letterSpacing: '0.12em', textTransform: 'uppercase', marginBottom: 12 }}>Affordability Score</div>
+                    <p style={{ fontSize: 14, color: '#a09080', lineHeight: 1.65, marginBottom: 18, fontFamily: 'DM Sans, sans-serif' }}>
+                      {affordability >= 75 ? `Your income is well-matched to ${profile.city}. You have room to save and build wealth comfortably.`
+                        : affordability >= 50 ? `You can afford to live in ${profile.city}, but your budget is tight. Watch discretionary spending closely.`
+                          : `${profile.city} is stretching your budget significantly. A roommate or lower-cost neighborhood would make a real difference.`}
+                    </p>
+                    <div style={{ height: 8, background: 'rgba(249,115,22,0.12)', borderRadius: 4, overflow: 'hidden' }}>
+                      <div style={{ height: '100%', width: `${affordability}%`, background: `linear-gradient(90deg, ${affordability < 50 ? '#f87171' : affordability < 75 ? '#fbbf24' : '#4ade80'}, #f97316)`, borderRadius: 4, transition: 'width 1s ease' }} />
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    {[
+                      ['Market 1BR Rent',    formatCurrency(liveRent) + '/mo',                  '#f97316'],
+                      ['Your Rent',          formatCurrency(profile.monthlyRent || 0) + '/mo',   rentToIncome > 35 ? '#f87171' : '#4ade80'],
+                      ['Rent to Income',     rentToIncome + '%',                                 rentToIncome > 35 ? '#f87171' : '#4ade80'],
+                      ['Rent Growth (live)', (liveGrow * 100).toFixed(1) + '%/yr',               '#fbbf24'],
+                      ['State Tax Rate',     city.stateTax === 0 ? 'No state tax' : (city.stateTax * 100).toFixed(1) + '%', '#fb923c'],
+                      ['Job Market Growth',  (city.jobGrowthRate * 100).toFixed(1) + '%/yr',     '#7dd3fc'],
+                    ].map(([label, val, color]) => (
+                      <div key={label} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '9px 14px', background: '#0d0d0d', borderRadius: 9, border: '1px solid rgba(249,115,22,0.08)' }}>
+                        <span style={{ fontSize: 13, color: '#a09080', fontFamily: 'DM Sans, sans-serif' }}>{label}</span>
+                        <span style={{ fontFamily: 'var(--font-mono)', fontSize: 13, fontWeight: 700, color }}>{val}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* City comparison chart */}
+            <div style={S.card}>
+              <div style={S.cardHead}><span style={S.headTitle}>Average 1BR Rent Across Cities</span><span style={S.headSub}>Your city highlighted</span></div>
+              <div style={{ padding: '20px', height: 280 }}>
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={Object.entries(CITIES).slice(0, 10).map(([k, v]) => ({ city: k.split(',')[0], rent: marketData?.cities?.[k]?.medianRent1BR || v.medianRent1BR, isYou: k === (profile.city || 'Atlanta, GA') }))} barSize={28}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="rgba(249,115,22,0.07)" />
+                    <XAxis dataKey="city" tick={{ fill: '#4a3f35', fontSize: 10 }} />
+                    <YAxis tickFormatter={v => `$${v.toLocaleString()}`} tick={{ fill: '#4a3f35', fontSize: 10 }} />
+                    <Tooltip formatter={v => [formatCurrency(v), 'Avg 1BR']} contentStyle={{ background: '#1a1a1a', border: '1px solid rgba(249,115,22,0.2)', borderRadius: 10, fontSize: 12, fontFamily: 'var(--font-mono)' }} />
+                    <Bar dataKey="rent" radius={[4,4,0,0]}>
+                      {Object.entries(CITIES).slice(0, 10).map(([k], i) => (
+                        <Cell key={i} fill={k === (profile.city || 'Atlanta, GA') ? '#f97316' : 'rgba(249,115,22,0.25)'} />
+                      ))}
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+
+            {/* Macro conditions */}
+            {marketData?.macro && (
+              <div style={S.card}>
+                <div style={S.cardHead}><span style={S.headTitle}>Current Economic Conditions</span><span style={S.headSub}>{marketData.source}</span></div>
+                <div style={{ padding: '6px 0' }}>
+                  {[
+                    ['Federal Funds Rate', (marketData.macro.fedFundsRate || 5.33).toFixed(2) + '%', '#f87171', 'High rates make borrowing more expensive but savings accounts pay more'],
+                    ['Inflation Rate', (marketData.macro.inflationRate || 3.1).toFixed(1) + '%', '#fbbf24', 'How fast prices are rising — affects your purchasing power'],
+                    ['Unemployment Rate', (marketData.macro.unemploymentRate || 3.9).toFixed(1) + '%', '#4ade80', 'Low unemployment means more job options and salary leverage'],
+                    ['Expected Salary Growth', (marketData.macro.salaryGrowthRate || 3.5).toFixed(1) + '%/yr', '#f97316', 'Average wage growth across the US economy'],
+                    ['S&P 500 Expected Return', (marketData.macro.sp500AnnualReturn || 10.4).toFixed(1) + '%/yr', '#fb923c', 'Long-term expected annual stock market return in this environment'],
+                  ].map(([label, val, color, note], i, arr) => (
+                    <div key={label} style={{ padding: '14px 22px', borderBottom: i < arr.length - 1 ? '1px solid rgba(249,115,22,0.07)' : 'none' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+                        <span style={{ fontSize: 14, color: '#f5f0eb', fontFamily: 'DM Sans, sans-serif', fontWeight: 500 }}>{label}</span>
+                        <span style={{ fontFamily: 'var(--font-mono)', fontSize: 14, fontWeight: 700, color }}>{val}</span>
+                      </div>
+                      <div style={{ fontSize: 12, color: '#4a3f35', fontFamily: 'DM Sans, sans-serif' }}>{note}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ── PROFILE ──────────────────────────────────────────── */}
+        {activeTab === 'profile' && (
+          <div style={{ maxWidth: 560 }}>
+            <div style={S.card}>
+              <div style={S.cardHead}><span style={S.headTitle}>Your Financial Profile</span><span style={S.headSub}>Changing these updates your dashboard and AI tips</span></div>
+              <div style={{ padding: '24px 22px' }}>
+                <FieldInput label="Annual Salary (before taxes)" fieldKey="salary" helper="Your total gross income per year" />
+                <FieldInput label="Monthly Rent or Mortgage" fieldKey="monthlyRent" suffix="/mo" helper="Your housing payment only" />
+                <FieldInput label="Monthly Groceries" fieldKey="groceries" suffix="/mo" />
+                <FieldInput label="Transport (gas, transit, etc.)" fieldKey="transport" suffix="/mo" />
+                <FieldInput label="Dining Out" fieldKey="diningOut" suffix="/mo" />
+                <FieldInput label="Entertainment" fieldKey="entertainment" suffix="/mo" />
+                <FieldInput label="Utilities" fieldKey="utilities" suffix="/mo" />
+                <FieldInput label="Health and Medical" fieldKey="health" suffix="/mo" />
+                <FieldInput label="Shopping" fieldKey="shopping" suffix="/mo" />
+                <FieldInput label="Subscriptions" fieldKey="subscriptions" suffix="/mo" />
+                <FieldInput label="Current Savings Balance" fieldKey="savings" helper="Total across all accounts" />
+                <FieldInput label="Total Outstanding Debt" fieldKey="debt" helper="Student loans, credit cards, car loans" />
+
+                <div style={{ marginBottom: 16 }}>
+                  <label style={{ display: 'block', fontSize: 13, fontWeight: 600, color: '#a09080', marginBottom: 5, fontFamily: 'DM Sans, sans-serif' }}>City</label>
+                  <select value={profile.city || 'Atlanta, GA'} onChange={e => setProfile(p => ({ ...p, city: e.target.value }))}
+                    style={{ background: '#0d0d0d', border: '1px solid rgba(249,115,22,0.2)', borderRadius: 10, padding: '11px 14px', color: '#f5f0eb', fontFamily: 'DM Sans, sans-serif', fontSize: 14, width: '100%', outline: 'none', cursor: 'pointer' }}>
+                    {Object.keys(CITIES).map(k => <option key={k} value={k}>{k}</option>)}
+                  </select>
+                </div>
+
+                <button onClick={saveProfile} style={{ width: '100%', padding: 13, background: saved ? '#4ade80' : '#f97316', color: '#0a0a0f', border: 'none', borderRadius: 11, cursor: 'pointer', fontSize: 15, fontWeight: 700, fontFamily: 'DM Sans, sans-serif', boxShadow: '0 4px 16px rgba(249,115,22,0.3)', transition: 'all 0.2s', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
+                  {saved ? <><CheckCircle size={15} /> Saved</> : 'Save Profile'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
