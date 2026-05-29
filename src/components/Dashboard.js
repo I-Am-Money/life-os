@@ -94,40 +94,14 @@ export default function Dashboard({ user, onLogout, setView }) {
   const healthColor = healthScore >= 70 ? '#4ade80' : healthScore >= 45 ? '#fbbf24' : '#f87171'
   const healthLabel = healthScore >= 70 ? 'Healthy'  : healthScore >= 45 ? 'Fair'    : 'Needs Work'
 
-  // Persist health score to localStorage every time it changes
+  // Sync health score to local file automatically
   useEffect(() => {
-    if (!user?.email || healthScore === 0) return
-    const key = `lifeos_health_${user.email}`
-    const existing = (() => { try { return JSON.parse(localStorage.getItem(key) || '[]') } catch { return [] } })()
-    const entry = {
-      score: healthScore,
-      label: healthLabel,
-      date:  new Date().toISOString(),
-      breakdown: {
-        savingsComponent:       Math.round(Math.min(savingsRate, 25) / 25 * 40),
-        debtComponent:          Math.round(Math.max(0, 100 - debtToIncome) / 100 * 30),
-        affordabilityComponent: Math.round(affordability / 100 * 30),
-        savingsRate,
-        debtToIncome,
-        affordability,
-        monthlySavings,
-        monthlyExpenses,
-        salary,
-        city: profile.city,
-      },
-    }
-    const last = existing[existing.length - 1]
-    // Always write when the score changes — keeps the record up to date
-    if (!last || last.score !== healthScore) {
-      existing.push(entry)
-      if (existing.length > 365) existing.splice(0, existing.length - 365)
-      localStorage.setItem(key, JSON.stringify(existing))
-    } else {
-      // Same score — just update the timestamp on the last entry so it stays current
-      existing[existing.length - 1].date = new Date().toISOString()
-      localStorage.setItem(key, JSON.stringify(existing))
-    }
-  }, [healthScore, user?.email])
+    fetch('/api/health-score', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ score: healthScore, label: healthLabel })
+    }).catch(err => console.error('Failed to sync health score', err))
+  }, [healthScore, healthLabel])
 
   // Spending breakdown from profile
   const txns          = user.transactions || []

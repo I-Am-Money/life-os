@@ -230,15 +230,15 @@ export default function FutureSimulator() {
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2,1fr)', gap: 12 }}>
                 {[
                   { icon: '', label: 'Your Net Worth Right Now', value: formatCurrency(current?.netWorth), sub: current?.netWorth < 0 ? '️ You owe more than you own' : ' Your starting position', color: current?.netWorth >= 0 ? '#f97316' : '#ef4444' },
-                  { icon: '', label: 'Net Worth in 10 Years', value: formatCurrency(future10?.netWorth), sub: future10?.netWorth > (current?.netWorth||0) ? ' Growing over time' : ' Needs improvement', color: '#fb923c' },
+                  { icon: '', label: 'Net Worth in 10 Years', value: formatCurrency(future10?.netWorth), sub: future10?.netWorth > (current?.netWorth||0) ? ' Growing over time' : ' Needs improvement', color: '#ffffff' },
                   { icon: '️', label: 'Estimated Retirement Age', value: results.retirementYear ? `Age ${results.retirementYear}` : 'After 65', sub: results.retirementYear ? `~${results.retirementYear - 22} years from now` : 'Invest more to retire earlier', color: results.retirementYear && results.retirementYear < 55 ? '#4ade80' : '#f59e0b' },
                   { icon: '', label: 'Financial Stress (Year 1)', value: stressInfo?.label, sub: `Score: ${current?.stressLevel}/100 — lower is better`, color: stressInfo?.color },
                 ].map(kpi => (
                   <div key={kpi.label} className="stat-card">
                     <div style={{ fontSize: 20, marginBottom: 4 }}>{kpi.icon}</div>
-                    <div className="stat-label">{kpi.label}</div>
+                    <div className="stat-label" style={{ color: '#ffffff' }}>{kpi.label}</div>
                     <div className="stat-value" style={{ color: kpi.color, fontSize: '1.3rem' }}>{kpi.value}</div>
-                    <div className="stat-delta">{kpi.sub}</div>
+                    <div className="stat-delta" style={{ color: '#ffffff' }}>{kpi.sub}</div>
                   </div>
                 ))}
               </div>
